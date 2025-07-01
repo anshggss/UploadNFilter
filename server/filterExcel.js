@@ -110,16 +110,21 @@ export async function filterExcel(filePath, custDataFilePath) {
   });
 
   // 3. Split filteredData into mainOrders and newNumOrders
-  const mainOrders = [];
-  const newNumOrders = [];
-  for (const row of filteredData) {
-    const mobileNo = String(row['Customer Mobile Number'] || '').trim();
-    if (custLookup[mobileNo]) {
-      mainOrders.push(row);
-    } else {
-      newNumOrders.push(row);
-    }
+ // 3. Split filteredData into mainOrders and newNumOrders
+// 3. Split filteredData into mainOrders and newNumOrders
+const mainOrders = [];
+const newNumOrders = [];
+for (const row of filteredData) {
+  const mobileNo = String(row['Customer Mobile Number'] || '').trim();
+  const flatNo = String(row['Flat Number'] || '').trim();
+  
+  // Put in mainOrders if: has lookup OR has no flat number
+  if (custLookup[mobileNo] || !flatNo) {
+    mainOrders.push(row);
+  } else {
+    newNumOrders.push(row);
   }
+}
 
   // 4. For mainOrders, update Flat # using lookup
   mainOrders.forEach(row => {
@@ -132,15 +137,15 @@ export async function filterExcel(filePath, custDataFilePath) {
   // 5. Group all orders by Order # and sort by Flat #
   // 5. Group all orders by Order # and sort by Flat #'s first letter
 // 5. Group all orders by Order # and sort by Flat # (floor-wise)
-function groupAndSort(orders) {
+function groupAndSort(orders, moveEmptyToBottom = false) {
   // Helper function to parse flat number into components
   function parseFlatNumber(flatNo) {
     const str = String(flatNo || '').trim();
-    if (!str) return { tower: '', floor: 0, apt: 0 };
+    if (!str) return { tower: '', floor: 0, apt: 0, isEmpty: true };
     
     // Extract tower letter(s) and number
     const match = str.match(/^([A-Z]+)(\d+)$/i);
-    if (!match) return { tower: str, floor: 0, apt: 0 };
+    if (!match) return { tower: str, floor: 0, apt: 0, isEmpty: !str };
     
     const tower = match[1].toUpperCase();
     const numberPart = match[2];
@@ -161,7 +166,7 @@ function groupAndSort(orders) {
       apt = 0;
     }
     
-    return { tower, floor, apt };
+    return { tower, floor, apt, isEmpty: false };
   }
   
   // Group by Order Number
@@ -176,6 +181,13 @@ function groupAndSort(orders) {
   const sortedGroups = Object.entries(groups).sort((a, b) => {
     const flatA = parseFlatNumber(a[1][0]['Flat Number']);
     const flatB = parseFlatNumber(b[1][0]['Flat Number']);
+    
+    // If moveEmptyToBottom is true, put empty flats at the bottom
+    if (moveEmptyToBottom) {
+      if (flatA.isEmpty && !flatB.isEmpty) return 1;
+      if (!flatA.isEmpty && flatB.isEmpty) return -1;
+      if (flatA.isEmpty && flatB.isEmpty) return 0;
+    }
     
     // First sort by tower
     if (flatA.tower !== flatB.tower) {
@@ -192,8 +204,19 @@ function groupAndSort(orders) {
   // Flatten the sorted groups
   return sortedGroups.flatMap(([orderNum, group]) => group);
 }
-  const sortedMainOrders = groupAndSort(mainOrders);
+const sortedMainOrders = groupAndSort(mainOrders, true);
   const sortedNewNumOrders = groupAndSort(newNumOrders);
+  // Calculate total items per order
+const orderItemTotals = {};
+for (const orderNum in orderGroups) {
+  let totalItems = 0;
+  orderGroups[orderNum].forEach(row => {
+    const itemCount = parseFloat(row['Item Count']) || 0;
+    totalItems += itemCount;
+  });
+  orderItemTotals[orderNum] = totalItems;
+}
+
 
   // 6. Transform for output (reuse your transformation logic)
   function transformRows(rows) {
@@ -209,7 +232,8 @@ function groupAndSort(orders) {
       let paymentMode = '';
       let paymentStatus = 'Due';
       const originalPaymentMode = String(row['Payment Mode'] || '').trim();
-      if (originalPaymentMode.toLowerCase() === 'phonepe') {
+      const originalPaymentStatus = String(row['Payment Status'] || '').trim();
+      if (originalPaymentMode.toLowerCase() === 'phonepe' && originalPaymentStatus.toUpperCase() === 'SUCCESSFUL') {
         paymentMode = 'ONL';
         paymentStatus = 'Paid';
       }
@@ -222,7 +246,7 @@ function groupAndSort(orders) {
         'Qty': itemCount,
         'Price': rate,
         'I Tot': itemTotal,
-        'Total Items': row['Total Items'],
+        'Total Items': orderItemTotals[row['Order Number']] || 0,
         'Payment Mode': paymentMode,
         'Payment Status': paymentStatus,
         'T Amt': orderTotals[orderNum],
