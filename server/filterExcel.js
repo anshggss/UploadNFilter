@@ -1,5 +1,7 @@
 import ExcelJS from 'exceljs';
 
+
+
 // Column mappings
 const COLUMN_MAPPINGS = {
   'Order Number': 'Order #',
@@ -32,6 +34,31 @@ const COLUMN_WIDTHS = {
   'T Amt': 6,        // Increased for totals
 };
 
+// Column widths for Sheet2 (includes additional columns)
+const COLUMN_WIDTHS_SHEET2 = {
+  'Order #': 7,
+  'Flat #': 7,
+  'Mobile No': 16,
+  'Cnf': 2,
+  'Product Name': 35,
+  'Qty': 2.5,
+  'Price': 5.5,
+  'I Tot': 5,
+  'Total Items': 6,
+  'Payment Mode': 5.75,
+  'Payment Status': 5.75,
+  'T Amt': 6,
+  'Catalogue Group': 20,    // New column
+  'Tax %': 8,               // New column
+  'Tax Amount': 10          // New column
+};
+
+function extractNumberFromAddress(address) {
+  const addressStr = String(address || '').trim();
+  const match = addressStr.match(/\d+/); // Find first sequence of digits
+  return match ? match[0] : '';
+}
+
 export async function filterExcel(filePath, custDataFilePath) {
   // Read the main workbook
   const workbook = new ExcelJS.Workbook();
@@ -62,64 +89,123 @@ export async function filterExcel(filePath, custDataFilePath) {
   });
 
   // STEP 1: Filter orders which are neither "COMPLETED" nor "REJECTED"
-  const filteredData = data.filter(row => {
-    const orderStatus = String(row['Order Status'] || '').toUpperCase().trim();
-    return orderStatus !== 'COMPLETED' && orderStatus !== 'REJECTED';
-  });
+// STEP 1: Filter orders which are neither "COMPLETED" nor "REJECTED"
+// STEP 1: Filter orders which are neither "COMPLETED" nor "REJECTED"
+const filteredData = data.filter(row => {
+  const orderStatus = String(row['Order Status'] || '').toUpperCase().trim();
+  return orderStatus !== 'COMPLETED' && orderStatus !== 'REJECTED';
+});
 
-  // Group filtered rows by Order Number
-  const orderGroups = {};
-  filteredData.forEach(row => {
-    const orderNum = row['Order Number'];
-    if (!orderGroups[orderNum]) orderGroups[orderNum] = [];
-    orderGroups[orderNum].push(row);
-  });
+// Group filtered rows by Order Number
+const orderGroups = {};
+filteredData.forEach(row => {
+  const orderNum = row['Order Number'];
+  if (!orderGroups[orderNum]) orderGroups[orderNum] = [];
+  orderGroups[orderNum].push(row);
+});
 
-  // Calculate Total Amount for each filtered order
-  const orderTotals = {};
-  for (const orderNum in orderGroups) {
-    let sum = 0;
-    orderGroups[orderNum].forEach(row => {
-      const count = parseFloat(row['Item Count']) || 0;
-      const discountedPrice = parseFloat(row['Discounted Price']) || 0;
-      const regularPrice = parseFloat(row['Price']) || 0;
-      const price = discountedPrice || regularPrice;
-      sum += count * price;
-    });
-    orderTotals[orderNum] = Math.round(sum * 100) / 100; // Round to 2 decimal places
+// Calculate Total Amount for each filtered order
+const orderTotals = {};
+for (const orderNum in orderGroups) {
+  let sum = 0;
+  orderGroups[orderNum].forEach(row => {
+    const count = parseFloat(row['Item Count']) || 0;
+    const discountedPrice = parseFloat(row['Discounted Price']) || 0;
+    const regularPrice = parseFloat(row['Price']) || 0;
+    const price = discountedPrice || regularPrice;
+    sum += count * price;
+  });
+  orderTotals[orderNum] = Math.round(sum * 100) / 100;
+}
+
+// Parse Cust_Data sheet and build lookup
+const custDataSheet = custDataWorkbook.getWorksheet('Cust_Data');
+if (!custDataSheet) {
+  throw new Error(`Sheet 'Cust_Data' not found in the customer data file.`);
+}
+
+const custLookup = {};
+custDataSheet.eachRow((row, rowNumber) => {
+  if (rowNumber === 1) return; // Skip header
+  let mbNo = '';
+  let flatNo = '';
+  row.eachCell((cell, colNumber) => {
+    const header = custDataSheet.getRow(1).getCell(colNumber).value;
+    if (header === 'Mb No') mbNo = String(cell.value || '').trim();
+    if (header === 'Flat No') flatNo = String(cell.value || '').trim();
+  });
+  if (mbNo) custLookup[mbNo] = flatNo;
+});
+
+// NEW: Address validation step
+// NEW: Address validation step
+const flaggedOrders = [];
+const validOrders = [];
+
+filteredData.forEach(row => {
+  const mobileNo = String(row['Customer Mobile Number'] || '').trim();
+  const shippingAddress = String(row['Shipping Address'] || '').trim();
+  const lookupFlatNo = custLookup[mobileNo];
+  
+  if (lookupFlatNo) {
+    // If no shipping address but mobile number exists in template, treat as valid
+    if (!shippingAddress) {
+      validOrders.push(row);
+      return;
+    }
+    
+    // Extract number from shipping address and flat number
+    const addressNumber = extractNumberFromAddress(shippingAddress);
+    const flatNumber = extractNumberFromAddress(lookupFlatNo);
+    
+    // Compare the extracted numbers
+    if (addressNumber && flatNumber && addressNumber === flatNumber) {
+      validOrders.push(row);
+    } else {
+      flaggedOrders.push(row);
+    }
+  } else {
+    // If no lookup found, treat as valid (existing logic)
+    validOrders.push(row);
   }
+});
 
-  // --- NEW LOGIC STARTS HERE ---
-  // 1. Parse Cust_Data sheet
-  const custDataSheet = custDataWorkbook.getWorksheet('Cust_Data');
-  if (!custDataSheet) {
-    throw new Error(`Sheet 'Cust_Data' not found in the customer data file.`);
-  }
-  // 2. Build Mb No -> Flat No lookup
-  const custLookup = {};
-  custDataSheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return; // Skip header
-    let mbNo = '';
-    let flatNo = '';
-    row.eachCell((cell, colNumber) => {
-      const header = custDataSheet.getRow(1).getCell(colNumber).value;
-      if (header === 'Mb No') mbNo = String(cell.value || '').trim();
-      if (header === 'Flat No') flatNo = String(cell.value || '').trim();
-    });
-    if (mbNo) custLookup[mbNo] = flatNo;
+// ✅ NOW calculate totals for flagged orders (AFTER flaggedOrders is defined)
+const flaggedOrderGroups = {};
+flaggedOrders.forEach(row => {
+  const orderNum = row['Order Number'];
+  if (!flaggedOrderGroups[orderNum]) flaggedOrderGroups[orderNum] = [];
+  flaggedOrderGroups[orderNum].push(row);
+});
+
+const flaggedOrderTotals = {};
+const flaggedOrderItemTotals = {};
+for (const orderNum in flaggedOrderGroups) {
+  let sum = 0;
+  let totalItems = 0;
+  flaggedOrderGroups[orderNum].forEach(row => {
+    const count = parseFloat(row['Item Count']) || 0;
+    const discountedPrice = parseFloat(row['Discounted Price']) || 0;
+    const regularPrice = parseFloat(row['Price']) || 0;
+    const price = discountedPrice || regularPrice;
+    sum += count * price;
+    totalItems += count;
   });
+  flaggedOrderTotals[orderNum] = Math.round(sum * 100) / 100;
+  flaggedOrderItemTotals[orderNum] = totalItems;
+}
 
-  // 3. Split filteredData into mainOrders and newNumOrders
- // 3. Split filteredData into mainOrders and newNumOrders
-// 3. Split filteredData into mainOrders and newNumOrders
+// Continue with validOrders instead of filteredData
+// Continue with validOrders instead of filteredData
 const mainOrders = [];
 const newNumOrders = [];
-for (const row of filteredData) {
+
+for (const row of validOrders) {
   const mobileNo = String(row['Customer Mobile Number'] || '').trim();
-  const flatNo = String(row['Flat Number'] || '').trim();
   
-  // Put in mainOrders if: has lookup OR has no flat number
-  if (custLookup[mobileNo] || !flatNo) {
+  // If mobile number exists in custLookup, put in mainOrders
+  // If mobile number does NOT exist in custLookup, put in newNumOrders
+  if (custLookup[mobileNo]) {
     mainOrders.push(row);
   } else {
     newNumOrders.push(row);
@@ -219,7 +305,7 @@ for (const orderNum in orderGroups) {
 
 
   // 6. Transform for output (reuse your transformation logic)
-  function transformRows(rows) {
+  function transformRows(rows, customOrderTotals = null, customOrderItemTotals = null) {
     return rows.map(row => {
       const itemCount = parseFloat(row['Item Count']) || 0;
       const discountedPrice = parseFloat(row['Discounted Price']) || 0;
@@ -237,6 +323,11 @@ for (const orderNum in orderGroups) {
         paymentMode = 'ONL';
         paymentStatus = 'Paid';
       }
+      
+      // Use custom totals if provided (for flagged orders), otherwise use global totals
+      const totalAmount = customOrderTotals ? customOrderTotals[orderNum] : orderTotals[orderNum];
+      const totalItems = customOrderItemTotals ? customOrderItemTotals[orderNum] : orderItemTotals[orderNum];
+      
       return {
         'Order #': row['Order Number'],
         'Flat #': row['Flat Number'],
@@ -246,13 +337,57 @@ for (const orderNum in orderGroups) {
         'Qty': itemCount,
         'Price': rate,
         'I Tot': itemTotal,
-        'Total Items': orderItemTotals[row['Order Number']] || 0,
+        'Total Items': totalItems || 0,
         'Payment Mode': paymentMode,
         'Payment Status': paymentStatus,
-        'T Amt': orderTotals[orderNum],
+        'T Amt': totalAmount,
       };
     });
   }
+
+  // Transform function for Sheet2 with additional columns
+function transformRowsSheet2(rows, customOrderTotals = null, customOrderItemTotals = null) {
+  return rows.map(row => {
+    const itemCount = parseFloat(row['Item Count']) || 0;
+    const discountedPrice = parseFloat(row['Discounted Price']) || 0;
+    const regularPrice = parseFloat(row['Price']) || 0;
+    const rate = discountedPrice || regularPrice;
+    const itemTotal = Math.round((itemCount * rate) * 100) / 100;
+    const orderNum = row['Order Number'];
+    let confirmedOrder = String(row['Confirmed Order']).toUpperCase().trim();
+    confirmedOrder = confirmedOrder === 'TRUE' ? 'T' : 'F';
+    let paymentMode = '';
+    let paymentStatus = 'Due';
+    const originalPaymentMode = String(row['Payment Mode'] || '').trim();
+    const originalPaymentStatus = String(row['Payment Status'] || '').trim();
+    if (originalPaymentMode.toLowerCase() === 'phonepe' && originalPaymentStatus.toUpperCase() === 'SUCCESSFUL') {
+      paymentMode = 'ONL';
+      paymentStatus = 'Paid';
+    }
+    
+    // Use custom totals if provided (for flagged orders), otherwise use global totals
+    const totalAmount = customOrderTotals ? customOrderTotals[orderNum] : orderTotals[orderNum];
+    const totalItems = customOrderItemTotals ? customOrderItemTotals[orderNum] : orderItemTotals[orderNum];
+    
+    return {
+      'Order #': row['Order Number'],
+      'Flat #': row['Flat Number'],
+      'Mobile No': row['Customer Mobile Number'],
+      'Cnf': confirmedOrder,
+      'Product Name': row['Product Name'],
+      'Qty': itemCount,
+      'Price': rate,
+      'I Tot': itemTotal,
+      'Total Items': totalItems || 0,
+      'Payment Mode': paymentMode,
+      'Payment Status': paymentStatus,
+      'T Amt': totalAmount,
+      'Catalogue Group': row['Catalogue Group'] || '',     // New column
+      'Tax %': row['Tax %'] || '',                         // New column
+      'Tax Amount': row['Tax Amount'] || ''                // New column
+    };
+  });
+}
   const transformedMainOrders = transformRows(sortedMainOrders);
   const transformedNewNumOrders = transformRows(sortedNewNumOrders);
   
@@ -260,15 +395,32 @@ for (const orderNum in orderGroups) {
   const allTransformedOrders = [...transformedMainOrders, ...transformedNewNumOrders];
   
   // 7. Write to sheets
-  const newWorkbook = new ExcelJS.Workbook();
-  // Main sheet
-  const mainSheet = newWorkbook.addWorksheet('Sheet1');
-  await addDataToSheet(mainSheet, transformedMainOrders);
-  // New_Num sheet
-  if (transformedNewNumOrders.length > 0) {
-    const newNumSheet = newWorkbook.addWorksheet('New_Num');
-    await addDataToSheet(newNumSheet, transformedNewNumOrders);
-  }
+// 7. Write to sheets
+// 7. Write to sheets
+const newWorkbook = new ExcelJS.Workbook();
+
+// Flagged_Add sheet (create first if there are flagged orders)
+if (flaggedOrders.length > 0) {
+  const flaggedSheet = newWorkbook.addWorksheet('Flagged_Add');
+  const transformedFlaggedOrders = transformRows(flaggedOrders, flaggedOrderTotals, flaggedOrderItemTotals);
+  await addDataToSheet(flaggedSheet, transformedFlaggedOrders);
+}
+
+// Main sheet (Sheet1)
+const mainSheet = newWorkbook.addWorksheet('Sheet1');
+await addDataToSheet(mainSheet, transformedMainOrders);
+
+// Sheet2 with additional columns
+const allValidOrders = [...sortedMainOrders, ...sortedNewNumOrders];
+const transformedSheet2Orders = transformRowsSheet2(allValidOrders);
+const sheet2 = newWorkbook.addWorksheet('Sheet2');
+await addDataToSheet(sheet2, transformedSheet2Orders, false, true); // true for useSheet2Columns
+
+// New_Num sheet
+if (transformedNewNumOrders.length > 0) {
+  const newNumSheet = newWorkbook.addWorksheet('New_Num');
+  await addDataToSheet(newNumSheet, transformedNewNumOrders);
+}
   
   // Create tower sheets
   const towers = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P'];
@@ -293,14 +445,16 @@ for (const orderNum in orderGroups) {
   return buffer;
 }
 
-async function addDataToSheet(worksheet, data, addBlankRows = false) {
-  const columns = Object.keys(COLUMN_WIDTHS);
+async function addDataToSheet(worksheet, data, addBlankRows = false, useSheet2Columns = false) {
+  // Choose which column set to use
+  const columnWidths = useSheet2Columns ? COLUMN_WIDTHS_SHEET2 : COLUMN_WIDTHS;
+  const columns = Object.keys(columnWidths);
   
   // Set up columns with proper widths
   worksheet.columns = columns.map(col => ({
     header: col,
     key: col,
-    width: COLUMN_WIDTHS[col]
+    width: columnWidths[col]
   }));
 
   // Style the header row
@@ -361,15 +515,14 @@ async function addDataToSheet(worksheet, data, addBlankRows = false) {
       };
       
       // Format numeric columns
-      if (col === 'Qty' || col === 'Price' || col === 'I Tot' || col === 'T Amt' || col === 'Total Items') {
-        cell.numFmt = '#,##0'; // Number format with 2 decimal places
+      if (col === 'Qty' || col === 'Price' || col === 'I Tot' || col === 'T Amt' || col === 'Total Items' || col === 'Tax %' || col === 'Tax Amount') {
+        cell.numFmt = '#,##0'; // Number format
         
         if (col === 'Qty' && parseFloat(cell.value) > 1) {
           font = { bold: true, size: 12, color: { argb: 'FF008000' } }; // Green
         }
       }
       
-
       if (col === 'Payment Status' && cell.value === 'Due') {
         font = { bold: true, size: 12, color: { argb: 'FFFF0000' } }; // Red
       }
