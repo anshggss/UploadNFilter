@@ -159,7 +159,7 @@ filteredData.forEach(row => {
     const flatNumber = extractNumberFromAddress(lookupFlatNo);
     
     // Compare the extracted numbers
-    if (addressNumber && flatNumber && addressNumber === flatNumber) {
+    if (addressNumber === flatNumber) {
       validOrders.push(row);
     } else {
       flaggedOrders.push(row);
@@ -519,7 +519,7 @@ async function addDataToSheet(worksheet, data, addBlankRows = false, useSheet2Co
         cell.numFmt = '#,##0'; // Number format
         
         if (col === 'Qty' && parseFloat(cell.value) > 1) {
-          font = { bold: true, size: 12, color: { argb: 'FF008000' } }; // Green
+          font = { bold: true, size: 12, color: { argb: 'FFFF0000' } }; // Red
         }
       }
       
