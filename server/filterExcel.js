@@ -53,9 +53,16 @@ const COLUMN_WIDTHS_SHEET2 = {
   'Tax Amount': 10          // New column
 };
 
+function normalizeFlatString(str) {
+  return String(str || '')
+    .replace(/[^A-Z0-9]/gi, '') // Removes spaces, dashes, slashes, etc.
+    .toUpperCase();             // Converts to uppercase
+}
+
 function extractNumberFromAddress(address) {
   const addressStr = String(address || '').trim();
-  const match = addressStr.match(/\d+/); // Find first sequence of digits
+  const newaddressStr = normalizeFlatString(addressStr); // Normalize inside the extract function itself
+  const match = newaddressStr.match(/\d+/); // Find first sequence of digits
   return match ? match[0] : '';
 }
 
@@ -144,7 +151,7 @@ const validOrders = [];
 
 filteredData.forEach(row => {
   const mobileNo = String(row['Customer Mobile Number'] || '').trim();
-  const shippingAddress = String(row['Shipping Address'] || '').trim();
+  const shippingAddress = String(row['Flat Number'] || '').trim();
   const lookupFlatNo = custLookup[mobileNo];
   
   if (lookupFlatNo) {
@@ -163,6 +170,7 @@ filteredData.forEach(row => {
       validOrders.push(row);
     } else {
       flaggedOrders.push(row);
+      console.log(addressNumber + " " + flatNumber);
     }
   } else {
     // If no lookup found, treat as valid (existing logic)
